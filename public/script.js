@@ -1,5 +1,6 @@
 // 极简：只有“拍照并作答 / 相册选图”
-// 默认更准(×3)；横屏/竖屏都按原始分辨率截帧；支持变焦（设备支持才展示）
+// 默认：更准(×3)；横屏/竖屏按原始分辨率截帧；支持变焦（设备支持才展示）
+// 关键提升：PNG 传输（文字保真）、上传图最长边 2560、相机就绪等待
 
 let currentStream = null;
 const mode = "accurate_vote3"; // 默认更准(×3)：并发三次 + 模型自动回退（后端已实现）
@@ -75,11 +76,12 @@ function drawVideoToCanvas() {
   canvas.width = w;
   canvas.height = h;
   ctx.drawImage(video, 0, 0, w, h);
+  // （可选轻微增强：对比度/锐化，默认先不启用）
 }
 
-// —— 上传图片等比压缩（最长边 2000）—— //
+// —— 上传图片等比压缩（最长边 2560）—— //
 function drawImageToCanvas(img) {
-  const maxEdge = 2000;
+  const maxEdge = 2560; // ↑ 提高上限，保真更好
   const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
   const w = Math.round(img.width * scale);
   const h = Math.round(img.height * scale);
@@ -88,8 +90,9 @@ function drawImageToCanvas(img) {
   ctx.drawImage(img, 0, 0, w, h);
 }
 
+// —— 以 PNG 传输（提升文字保真）—— //
 function dataURLFromCanvas() {
-  return canvas.toDataURL("image/jpeg", 0.9);
+  return canvas.toDataURL("image/png"); // ← 关键：PNG
 }
 
 // —— 调用后端 —— //
@@ -118,7 +121,7 @@ document.getElementById("capture").addEventListener("click", async () => {
       });
     }
     drawVideoToCanvas();                  // 横屏时 w>h，自然是横向清晰截帧
-    const dataUrl = dataURLFromCanvas();
+    const dataUrl = dataURLFromCanvas();  // PNG
     const out = await sendToServer(dataUrl);
     setAnswer(out.answer, out.meta);
     setStatus("完成");
@@ -138,11 +141,11 @@ fileInput.addEventListener("change", async (e) => {
     reader.onload = async () => {
       const img = new Image();
       img.onload = async () => {
-        drawImageToCanvas(img);           // 等比压缩（最长边 2000）
+        drawImageToCanvas(img);           // 等比压缩（最长边 2560）
         setStatus("识别中…");
         setAnswer("");
         try {
-          const dataUrl = dataURLFromCanvas();
+          const dataUrl = dataURLFromCanvas(); // PNG
           const out = await sendToServer(dataUrl);
           setAnswer(out.answer, out.meta);
           setStatus("完成");
