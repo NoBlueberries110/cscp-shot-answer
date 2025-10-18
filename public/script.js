@@ -2,29 +2,33 @@
 let currentStream = null;
 let useBackCamera = true;
 
-// 创建一个日志区域（强制显示）
-const logArea = document.createElement("pre");
-logArea.id = "__log_area";
-logArea.style.position = "fixed";
-logArea.style.bottom = "0";
-logArea.style.left = "0";
-logArea.style.right = "0";
-logArea.style.background = "rgba(0,0,0,0.8)";
-logArea.style.color = "white";
-logArea.style.fontSize = "12px";
-logArea.style.zIndex = "9999";
-logArea.style.padding = "4px";
-logArea.style.maxHeight = "160px";
-logArea.style.overflowY = "auto";
-logArea.style.whiteSpace = "pre-wrap";
-document.body.appendChild(logArea);
+// 存储日志字符串
+let _logBuffer = [];
+
+// 在页面上创建按钮和日志窗口
+(function createLogUI() {
+  const btn = document.createElement("button");
+  btn.id = "__log_button";
+  btn.innerText = "🔍 日志";
+  btn.style.position = "fixed";
+  btn.style.top = "8px";
+  btn.style.right = "8px";
+  btn.style.zIndex = "9999";
+  btn.style.padding = "8px";
+  btn.style.background = "#f00";
+  btn.style.color = "#fff";
+  btn.style.border = "none";
+  btn.style.borderRadius = "4px";
+  document.body.appendChild(btn);
+  btn.addEventListener("click", () => {
+    alert(_logBuffer.join("\n"));
+  });
+})();
 
 function log(msg) {
-  const d = document.getElementById("__log_area");
-  if (d) {
-    d.innerText += msg + "\n";
-  }
-  console.log(msg);
+  const ts = new Date().toISOString();
+  _logBuffer.push(ts + " → " + msg);
+  console.log("LOG:", msg);
 }
 
 async function initCamera() {
@@ -44,7 +48,7 @@ async function initCamera() {
     currentStream = stream;
     const video = document.getElementById("preview");
     video.srcObject = stream;
-    log("initCamera: success");
+    log("initCamera success");
   } catch (e) {
     setStatus("无法访问相机：" + e.message);
     log("initCamera error: " + e.message);
@@ -66,10 +70,10 @@ async function takePhotoAndSend() {
   const canvas = document.getElementById("canvas");
   const w = video.videoWidth;
   const h = video.videoHeight;
-  log("video size: " + w + "x" + h);
+  log("video size = " + w + "x" + h);
   if (!w || !h) {
     setStatus("相机未就绪，请稍后再试");
-    log("拍照失败：videoWidth 或 videoHeight 为 0");
+    log("video size invalid");
     return;
   }
   canvas.width = w;
@@ -87,7 +91,7 @@ async function takePhotoAndSend() {
     });
     log("fetch returned status: " + r.status);
     const text = await r.text();
-    log("fetch text response: " + text);
+    log("response text: " + text);
     try {
       const out = JSON.parse(text);
       log("parsed JSON: " + JSON.stringify(out));
@@ -96,7 +100,7 @@ async function takePhotoAndSend() {
         setStatus("完成");
       } else {
         setStatus("未能得到答案");
-        log("out.answer undefined");
+        log("out.answer missing");
       }
     } catch (e2) {
       log("JSON parse error: " + e2.message);
@@ -112,5 +116,4 @@ document.getElementById("flip").addEventListener("click", () => {
   useBackCamera = !useBackCamera;
   initCamera();
 });
-
 initCamera();
