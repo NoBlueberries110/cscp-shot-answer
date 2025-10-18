@@ -1,9 +1,8 @@
 {
-  "version": 2,
   "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api"
-    }
+    { "source": "/answer", "destination": "/api/answer" }
+  ],
+  "redirects": [
+    { "source": "/", "destination": "/public/index.html", "permanent": false }
   ]
 }
