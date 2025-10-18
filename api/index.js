@@ -19,6 +19,11 @@ app.use(bodyParser.json({ limit: "10mb" }));
 // 提供前端静态文件
 app.use(express.static(path.join(__dirname, "../public")));
 
+// 处理根路径，返回前端界面
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/index.html"));
+});
+
 app.post("/answer", async (req, res) => {
   try {
     const { imageBase64 } = req.body;
