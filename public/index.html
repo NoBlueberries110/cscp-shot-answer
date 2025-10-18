@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>拍题速答（极简）</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="拍题速答">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <meta name="theme-color" content="#111">
+  </head>
+  <body>
+    <main>
+      <h1>拍题速答</h1>
+      <video id="preview" autoplay playsinline></video>
+      <canvas id="canvas" style="display:none;"></canvas>
+
+      <div class="controls">
+        <button id="capture">📸 拍照并作答</button>
+        <button id="flip">🔄 切换镜头</button>
+      </div>
+
+      <div id="status">就绪</div>
+      <div id="answer" class="answer"></div>
+    </main>
+    <script src="script.js"></script>
+  
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(()=>{});
+        });
+      }
+    </script>
+  </body>
+</html>
