@@ -7,6 +7,6 @@
   "routes": [
     { "src": "/answer", "dest": "/api/index.js" },
     { "src": "/", "dest": "/public/index.html" },
-    { "src": "/(.*)", "dest": "/api/index.js" }
+    { "src": "/(.*)", "dest": "/public/$1" }
   ]
 }
