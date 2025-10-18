@@ -1,46 +1,162 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>拍照秒答 · 极简</title>
-  <style>
-    body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#f8f9fb; }
-    header { padding:12px 16px; font-weight:600; font-size:18px; }
-    .wrap { padding:12px 16px; }
-    .panel { background:#fff; border-radius:14px; box-shadow:0 6px 20px rgba(0,0,0,.05); padding:12px; margin-bottom:12px; }
-    video, canvas { width:100%; border-radius:12px; background:#000; }
-    .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-    button, label.btn { flex:1; padding:12px 10px; border-radius:12px; border:1px solid #e5e7eb; background:#fff; font-size:15px; }
-    #zoomWrap { position:fixed; left:12px; bottom:12px; z-index:9999; width:65%; display:none; }
-    #zoomSlider { width:100%; }
-    .status { color:#666; font-size:14px; margin-top:6px; }
-    .answer { font-size:28px; font-weight:800; margin-top:6px; }
-    .meta { font-size:12px; color:#888; margin-top:4px; }
-  </style>
-</head>
-<body>
-  <header>拍照秒答</header>
-  <div class="wrap">
-    <div class="panel">
-      <video id="preview" playsinline autoplay muted></video>
-      <canvas id="canvas" style="display:none;"></canvas>
-      <div id="zoomWrap"><input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" /></div>
+// 极简：只有“拍照并作答 / 相册选图”
+// 默认更准(×3)；横屏/竖屏都按原始分辨率截帧；支持变焦（设备支持才展示）
 
-      <div class="btns">
-        <button id="capture">拍照并作答</button>
-        <label class="btn">
-          从相册选图
-          <input id="fileInput" type="file" accept="image/*" style="display:none;" />
-        </label>
-      </div>
+let currentStream = null;
+const mode = "accurate_vote3"; // 默认更准(×3)：内部并发三次 + 模型自动回退
 
-      <div class="status" id="status">准备就绪</div>
-      <div class="answer" id="answer"></div>
-      <div class="meta"><span id="modelMeta"></span></div>
-    </div>
-  </div>
+const video = document.getElementById("preview");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const answerEl = document.getElementById("answer");
+const modelMetaEl = document.getElementById("modelMeta");
+const fileInput = document.getElementById("fileInput");
 
-  <script src="script.js"></script>
-</body>
-</html>
+// —— 状态与结果 —— //
+function setStatus(msg) { statusEl.textContent = msg; }
+function setAnswer(ans, meta) {
+  answerEl.textContent = ans || "";
+  modelMetaEl.textContent = meta?.model ? `模型：${meta.model}${meta.votes ? `  投票：${meta.votes.join("/")}` : ""}` : "";
+}
+
+// —— 相机初始化（等待就绪，兼容横屏）—— //
+async function initCamera() {
+  try {
+    if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+
+    const constraints = {
+      video: {
+        facingMode: "environment",     // 默认用后摄
+        width:  { ideal: 1920 },
+        height: { ideal: 1920 }
+      },
+      audio: false
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    currentStream = stream;
+    video.srcObject = stream;
+
+    // 等待就绪，确保 videoWidth/Height 可用
+    await new Promise(resolve => {
+      const check = () => (video.readyState >= 2 ? resolve() : requestAnimationFrame(check));
+      check();
+    });
+    setStatus("相机已连接");
+    attachZoomSlider(stream);
+  } catch (e) {
+    setStatus("无法访问相机：" + e.message);
+  }
+}
+
+// —— 变焦滑杆（设备支持才展示）—— //
+function attachZoomSlider(stream) {
+  const zoomWrap = document.getElementById("zoomWrap");
+  const slider = document.getElementById("zoomSlider");
+  const track = stream.getVideoTracks()[0];
+  const caps = track.getCapabilities?.();
+  if (!caps || !("zoom" in caps)) { zoomWrap.style.display = "none"; return; }
+  const sMin = caps.zoom.min ?? 1;
+  const sMax = caps.zoom.max ?? 1;
+  const sStep = caps.zoom.step ?? 0.1;
+  slider.min = sMin; slider.max = sMax; slider.step = sStep; slider.value = sMin;
+  zoomWrap.style.display = "block";
+  slider.oninput = () => {
+    track.applyConstraints({ advanced: [{ zoom: Number(slider.value) }] }).catch(()=>{});
+  };
+}
+
+// —— 画面到画布（横/竖都按原始方向）—— //
+function drawVideoToCanvas() {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (!w || !h) throw new Error("相机未就绪");
+  canvas.width = w;
+  canvas.height = h;
+  ctx.drawImage(video, 0, 0, w, h);
+}
+
+// —— 上传图片等比压缩（最长边 2000）—— //
+function drawImageToCanvas(img) {
+  const maxEdge = 2000;
+  const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  canvas.width = w;
+  canvas.height = h;
+  ctx.drawImage(img, 0, 0, w, h);
+}
+
+function dataURLFromCanvas() {
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+// —— 调后端 —— //
+async function sendToServer(imgDataUrl) {
+  const r = await fetch("/answer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageBase64: imgDataUrl, mode }) // 默认更准(×3)
+  });
+  const txt = await r.text();
+  let out = {};
+  try { out = JSON.parse(txt); } catch { throw new Error("服务器返回异常"); }
+  if (!out.answer) throw new Error("未能得到答案");
+  return out;
+}
+
+// —— 事件：拍照并作答 —— //
+document.getElementById("capture").addEventListener("click", async () => {
+  try {
+    setStatus("识别中…");
+    setAnswer("");
+    if (video.readyState < 2) {
+      await new Promise(resolve => {
+        const check = () => (video.readyState >= 2 ? resolve() : requestAnimationFrame(check));
+        check();
+      });
+    }
+    drawVideoToCanvas();
+    const dataUrl = dataURLFromCanvas();
+    const out = await sendToServer(dataUrl);
+    setAnswer(out.answer, out.meta);
+    setStatus("完成");
+    if (navigator.vibrate) navigator.vibrate(60);
+  } catch (e) {
+    setStatus("失败：" + e.message);
+  }
+});
+
+// —— 事件：相册选图 —— //
+fileInput.addEventListener("change", async (e) => {
+  try {
+    const f = e.target.files?.[0];
+    if (!f) return;
+
+    // 读图到画布（相册通常更清晰）
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const img = new Image();
+      img.onload = async () => {
+        drawImageToCanvas(img);
+        setStatus("识别中…");
+        setAnswer("");
+        const dataUrl = dataURLFromCanvas();
+        try {
+          const out = await sendToServer(dataUrl);
+          setAnswer(out.answer, out.meta);
+          setStatus("完成");
+          if (navigator.vibrate) navigator.vibrate(60);
+        } catch (err) {
+          setStatus("失败：" + err.message);
+        }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(f);
+  } catch (err) {
+    setStatus("读取图片失败：" + err.message);
+  }
+});
+
+// 启动
+initCamera();
