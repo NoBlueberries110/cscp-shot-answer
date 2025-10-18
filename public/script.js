@@ -2,7 +2,7 @@
 // 默认更准(×3)；横屏/竖屏都按原始分辨率截帧；支持变焦（设备支持才展示）
 
 let currentStream = null;
-const mode = "accurate_vote3"; // 默认更准(×3)：内部并发三次 + 模型自动回退
+const mode = "accurate_vote3"; // 默认更准(×3)：并发三次 + 模型自动回退（后端已实现）
 
 const video = document.getElementById("preview");
 const canvas = document.getElementById("canvas");
@@ -16,7 +16,9 @@ const fileInput = document.getElementById("fileInput");
 function setStatus(msg) { statusEl.textContent = msg; }
 function setAnswer(ans, meta) {
   answerEl.textContent = ans || "";
-  modelMetaEl.textContent = meta?.model ? `模型：${meta.model}${meta.votes ? `  投票：${meta.votes.join("/")}` : ""}` : "";
+  modelMetaEl.textContent = meta?.model
+    ? `模型：${meta.model}${meta.votes ? `  投票：${meta.votes.join("/")}` : ""}`
+    : "";
 }
 
 // —— 相机初始化（等待就绪，兼容横屏）—— //
@@ -26,7 +28,7 @@ async function initCamera() {
 
     const constraints = {
       video: {
-        facingMode: "environment",     // 默认用后摄
+        facingMode: "environment",   // 默认后摄
         width:  { ideal: 1920 },
         height: { ideal: 1920 }
       },
@@ -36,7 +38,7 @@ async function initCamera() {
     currentStream = stream;
     video.srcObject = stream;
 
-    // 等待就绪，确保 videoWidth/Height 可用
+    // 等待相机就绪，确保 videoWidth/Height 可用（横屏也能拿到正确尺寸）
     await new Promise(resolve => {
       const check = () => (video.readyState >= 2 ? resolve() : requestAnimationFrame(check));
       check();
@@ -65,7 +67,7 @@ function attachZoomSlider(stream) {
   };
 }
 
-// —— 画面到画布（横/竖都按原始方向）—— //
+// —— 将当前视频帧绘制到画布（横/竖都按原始方向）—— //
 function drawVideoToCanvas() {
   const w = video.videoWidth;
   const h = video.videoHeight;
@@ -90,7 +92,7 @@ function dataURLFromCanvas() {
   return canvas.toDataURL("image/jpeg", 0.9);
 }
 
-// —— 调后端 —— //
+// —— 调用后端 —— //
 async function sendToServer(imgDataUrl) {
   const r = await fetch("/answer", {
     method: "POST",
@@ -115,7 +117,7 @@ document.getElementById("capture").addEventListener("click", async () => {
         check();
       });
     }
-    drawVideoToCanvas();
+    drawVideoToCanvas();                  // 横屏时 w>h，自然是横向清晰截帧
     const dataUrl = dataURLFromCanvas();
     const out = await sendToServer(dataUrl);
     setAnswer(out.answer, out.meta);
@@ -132,16 +134,15 @@ fileInput.addEventListener("change", async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
 
-    // 读图到画布（相册通常更清晰）
     const reader = new FileReader();
     reader.onload = async () => {
       const img = new Image();
       img.onload = async () => {
-        drawImageToCanvas(img);
+        drawImageToCanvas(img);           // 等比压缩（最长边 2000）
         setStatus("识别中…");
         setAnswer("");
-        const dataUrl = dataURLFromCanvas();
         try {
+          const dataUrl = dataURLFromCanvas();
           const out = await sendToServer(dataUrl);
           setAnswer(out.answer, out.meta);
           setStatus("完成");
