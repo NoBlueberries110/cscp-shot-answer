@@ -16,14 +16,10 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: "10mb" }));
 
-// 提供前端静态文件
+// 静态文件（虽然 routes 已经把 / 指向 index.html，但备用）
 app.use(express.static(path.join(__dirname, "../public")));
 
-// 处理根路径，返回前端界面
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "../public/index.html"));
-});
-
+// API 路由
 app.post("/answer", async (req, res) => {
   try {
     const { imageBase64 } = req.body;
@@ -67,9 +63,9 @@ app.post("/answer", async (req, res) => {
 
     res.json({ answer: text });
   } catch (err) {
-    console.error(err);
+    console.error("ERROR in /answer:", err);
     res.status(500).json({ error: "server_error", detail: String(err) });
   }
-});
+}
 
 export default app;
