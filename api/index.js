@@ -11,66 +11,77 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: "10mb" }));
 
+// 两种模型：快速(便宜) / 准确(更稳)
+const MODEL_MAP = {
+  fast: "gpt-4o-mini",
+  accurate: "gpt-4o",
+};
+
 app.post("/answer", async (req, res) => {
   try {
-    const { imageBase64 } = req.body;
+    const { imageBase64, mode = "fast" } = req.body;
 
     if (!imageBase64 || !imageBase64.startsWith("data:image")) {
       return res.status(400).json({ error: "imageBase64 required" });
     }
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const model = MODEL_MAP[mode] || MODEL_MAP.fast;
 
     const response = await openai.responses.create({
-      model: "gpt-4o-mini",
+      model,
       temperature: 0,
-      max_output_tokens: 32,              // ✅ 改成 >= 16，比如 32
+      max_output_tokens: 32, // >= 16，之前报错就是这里太小
       input: [
         {
           role: "system",
           content:
-            "你是一个只返回选项字母（A/B/C/D）的判题助手。严格只输出一个大写字母，不要任何解释。",
+            "你是一个判题助手。请从图片中的单选题中选出正确答案，严格只输出一个大写字母 A/B/C/D，不要任何其它字符、空格、换行或解释。如果看不清，也必须输出最可能的一个字母。",
         },
         {
           role: "user",
           content: [
             { type: "input_text", text: "请判断图片题的正确答案，只返回 A/B/C/D。" },
-            // data URL 作为 image_url 传入即可
+            // data URL 直接放在 image_url 即可
             { type: "input_image", image_url: imageBase64 },
           ],
         },
       ],
     });
 
-    // 兼容解析 Responses API 的返回
+    // 解析 Responses API 的返回
     let answer = "";
     if (response?.output && Array.isArray(response.output)) {
-      const msgText = response.output
-        .filter(p => p.type === "message")
-        .map(p => (Array.isArray(p.content) ? p.content.map(c => c?.text || "").join("") : ""))
+      const text = response.output
+        .filter((p) => p.type === "message")
+        .map((p) =>
+          Array.isArray(p.content) ? p.content.map((c) => c?.text || "").join("") : ""
+        )
         .join("");
-      answer = (msgText || "").trim().replace(/[^A-D]/g, "");
+      answer = (text || "").trim().replace(/[^A-D]/g, "");
     } else if (response?.output_text) {
       answer = response.output_text.trim().replace(/[^A-D]/g, "");
     }
 
     if (!answer) {
-      // 给个兜底，避免前端显示“未能得到答案”
-      return res.status(200).json({ answer: "A", note: "fallback" });
+      // 兜底，避免前端空
+      return res.status(200).json({ answer: "A", meta: { fallback: true } });
     }
 
-    res.json({ answer });
+    res.json({
+      answer,
+      meta: {
+        model: response?.model || model,
+        id: response?.id || null,
+        usage: response?.usage || null,
+      },
+    });
   } catch (err) {
-    // 把 OpenAI 的错误细节透传回来，前端日志能看到
     const detail = err?.response?.data || err?.message || String(err);
     console.error("Server error:", detail);
     res.status(500).json({ error: "server_error", detail });
   }
 });
 
-// 可用于快速检查 API 是否活着
-app.get("/", (_, res) => {
-  res.send("API OK");
-});
-
+app.get("/", (_, res) => res.send("API OK"));
 export default app;
