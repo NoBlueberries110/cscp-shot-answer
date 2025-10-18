@@ -1,7 +1,8 @@
 // /public/script.js
 let currentStream = null;
 let useBackCamera = true;
-let mode = "fast"; // fast / accurate / accurate_vote3
+// 默认更准(×3)
+let mode = "accurate_vote3"; // fast / accurate / accurate_vote3
 
 const video = document.getElementById("preview");
 const canvas = document.getElementById("canvas");
@@ -12,22 +13,22 @@ const modelMetaEl = document.getElementById("modelMeta");
 const fileInput = document.getElementById("fileInput");
 const cropOverlay = document.getElementById("cropOverlay");
 
-// —— 模式切换 —— //
+// —— 模式切换按钮 —— //
 const modeBtn = document.getElementById("modeToggle");
+modeBtn.textContent = "模式：更准(×3)";
 modeBtn.onclick = () => {
-  mode = mode === "fast" ? "accurate" : (mode === "accurate" ? "accurate_vote3" : "fast");
-  const label = mode === "fast" ? "快速" : (mode === "accurate" ? "准确" : "更准(×3)");
+  mode = mode === "accurate_vote3" ? "accurate" : (mode === "accurate" ? "fast" : "accurate_vote3");
+  const label = mode === "accurate_vote3" ? "更准(×3)" : (mode === "accurate" ? "准确" : "快速");
   modeBtn.textContent = `模式：${label}`;
 };
 
-// —— 状态与结果 —— //
 function setStatus(msg) { statusEl.textContent = msg; }
 function setAnswer(ans, meta) {
   answerEl.textContent = ans || "";
-  if (meta) modelMetaEl.textContent = `模型：${meta.model || (Array.isArray(meta?.usage) ? "gpt-5" : "")}${meta.votes ? `  投票：${meta.votes.join("/")}` : ""}`;
+  modelMetaEl.textContent = meta?.model ? `模型：${meta.model}${meta.votes ? `  投票：${meta.votes.join("/")}` : ""}` : "";
 }
 
-// —— 相机 & 变焦 —— //
+// —— 相机初始化（考虑横屏 & 就绪）—— //
 async function initCamera() {
   try {
     if (currentStream) currentStream.getTracks().forEach(t => t.stop());
@@ -35,8 +36,8 @@ async function initCamera() {
     const constraints = {
       video: {
         facingMode: useBackCamera ? "environment" : "user",
-        width: { ideal: 1920 },
-        height: { ideal: 1920 }
+        width: { ideal: 1920 },   // 提高分辨率，横屏更清晰
+        height: { ideal: 1920 },
       },
       audio: false
     };
@@ -44,20 +45,25 @@ async function initCamera() {
     currentStream = stream;
     video.srcObject = stream;
 
-    video.onloadedmetadata = () => { setStatus("相机已连接"); };
+    // 等待就绪，确保 videoWidth/Height 可用
+    await new Promise(resolve => {
+      const check = () => (video.readyState >= 2 ? resolve() : requestAnimationFrame(check));
+      check();
+    });
+    setStatus("相机已连接");
     attachZoomSlider(stream);
   } catch (e) {
     setStatus("无法访问相机：" + e.message);
   }
 }
 
+// —— 变焦滑杆（支持才显示）—— //
 function attachZoomSlider(stream) {
   const zoomWrap = document.getElementById("zoomWrap");
   const slider = document.getElementById("zoomSlider");
   const track = stream.getVideoTracks()[0];
   const caps = track.getCapabilities?.();
   if (!caps || !("zoom" in caps)) { zoomWrap.style.display = "none"; return; }
-  // 设备支持 zoom
   const sMin = caps.zoom.min ?? 1;
   const sMax = caps.zoom.max ?? 1;
   const sStep = caps.zoom.step ?? 0.1;
@@ -68,19 +74,25 @@ function attachZoomSlider(stream) {
   };
 }
 
-// —— 拍照/上传到画布 —— //
+// —— 把当前视频帧画到画布（横/竖都按原始方向绘制）—— //
 function drawVideoToCanvas() {
-  const w = video.videoWidth, h = video.videoHeight;
+  const w = video.videoWidth;
+  const h = video.videoHeight;
   if (!w || !h) throw new Error("相机未就绪");
-  canvas.width = w; canvas.height = h;
+  canvas.width = w;
+  canvas.height = h;
+  // 不强制旋转：保持摄像头原始方向（横屏时 w>h，自然是横向）
   ctx.drawImage(video, 0, 0, w, h);
 }
 
+// —— 把上传图片画到画布（最长边 2000 等比压缩）—— //
 function drawImageToCanvas(img) {
-  const maxW = 2000; // 防止过大
-  const scale = img.width > maxW ? maxW / img.width : 1;
-  const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
-  canvas.width = w; canvas.height = h;
+  const maxEdge = 2000;
+  const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  canvas.width = w;
+  canvas.height = h;
   ctx.drawImage(img, 0, 0, w, h);
 }
 
@@ -92,40 +104,34 @@ function dataURLFromCanvas(cropRect) {
     t.height = Math.max(1, Math.round(h));
     const tctx = t.getContext("2d");
     tctx.drawImage(canvas, x, y, w, h, 0, 0, t.width, t.height);
-    return t.toDataURL("image/jpeg", 0.92);
+    return t.toDataURL("image/jpeg", 0.9);
   }
-  return canvas.toDataURL("image/jpeg", 0.92);
+  return canvas.toDataURL("image/jpeg", 0.9);
 }
 
-// —— 裁切交互 —— //
+// —— 裁剪交互（横/竖都按可视区域计算）—— //
 let isCropping = false;
 let cropStart = null;
 let cropRect = null;
 
-function canvasClientRect() {
-  const r = video.getBoundingClientRect();
-  // overlay 与 video 同大小同位置
-  return r;
+function videoClientRect() {
+  return video.getBoundingClientRect();
 }
-
 function showCropOverlay(rect) {
   if (!rect) { cropOverlay.style.display = "none"; return; }
-  const r = canvasClientRect();
+  const r = videoClientRect();
   cropOverlay.style.display = "block";
   cropOverlay.style.left = (r.left + rect.x) + "px";
   cropOverlay.style.top = (r.top + rect.y) + "px";
   cropOverlay.style.width = rect.w + "px";
   cropOverlay.style.height = rect.h + "px";
 }
-
-// 将页面坐标转换为画布像素
 function toCanvasXY(clientX, clientY) {
-  const r = video.getBoundingClientRect();
+  const r = videoClientRect();
   const xRate = canvas.width / r.width;
   const yRate = canvas.height / r.height;
   return { x: (clientX - r.left) * xRate, y: (clientY - r.top) * yRate, visX: clientX - r.left, visY: clientY - r.top };
 }
-
 function startCrop(e) {
   const t = e.touches ? e.touches[0] : e;
   cropStart = toCanvasXY(t.clientX, t.clientY);
@@ -140,7 +146,8 @@ function moveCrop(e) {
   const x = Math.min(cur.visX, cropStart.visX);
   const y = Math.min(cur.visY, cropStart.visY);
   showCropOverlay({ x, y, w, h });
-  // 同步画布坐标
+
+  // 转画布坐标
   const rx = Math.min(cur.x, cropStart.x);
   const ry = Math.min(cur.y, cropStart.y);
   const rw = Math.abs(cur.x - cropStart.x);
@@ -175,9 +182,15 @@ document.getElementById("capture").addEventListener("click", async () => {
   try {
     setStatus("识别中…");
     setAnswer("");
-    // 拍当前相机帧
-    drawVideoToCanvas();
-    const dataUrl = dataURLFromCanvas(); // 全图
+    // 等待就绪，避免 0×0
+    if (video.readyState < 2) {
+      await new Promise(resolve => {
+        const check = () => (video.readyState >= 2 ? resolve() : requestAnimationFrame(check));
+        check();
+      });
+    }
+    drawVideoToCanvas(); // 横屏时 w>h，自然是横向
+    const dataUrl = dataURLFromCanvas();
     const out = await sendToServer(dataUrl);
     setAnswer(out.answer, out.meta);
     setStatus("完成");
@@ -189,8 +202,6 @@ document.getElementById("capture").addEventListener("click", async () => {
 
 document.getElementById("cropDetect").addEventListener("click", async () => {
   try {
-    // 如果当前在用相机，先把一帧画到 canvas（上传图片则已经在画布上了）
-    if (currentStream) drawVideoToCanvas();
     if (!cropRect || cropRect.w < 5 || cropRect.h < 5) {
       setStatus("请先在预览上拖动，框选题目区域");
       return;
@@ -207,18 +218,15 @@ document.getElementById("cropDetect").addEventListener("click", async () => {
   }
 });
 
-// 前后摄切换
 document.getElementById("flip").addEventListener("click", () => {
   useBackCamera = !useBackCamera;
   initCamera();
 });
 
-// 相册上传
 fileInput.addEventListener("change", async (e) => {
   try {
     const f = e.target.files?.[0];
     if (!f) return;
-    // 停掉相机，避免干扰
     if (currentStream) { currentStream.getTracks().forEach(t => t.stop()); currentStream = null; }
     video.srcObject = null;
 
@@ -226,8 +234,7 @@ fileInput.addEventListener("change", async (e) => {
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        drawImageToCanvas(img);
-        // 清掉上一次的裁切框
+        drawImageToCanvas(img);         // 等比压缩（最长边 2000）
         cropRect = null; showCropOverlay(null);
         setStatus("图片已加载，可直接识别或拖动框选后点“仅识别框选区域”");
       };
